@@ -19898,10 +19898,6 @@ size_t ggml_quantize_chunk(enum ggml_type type, const float * src, void * dst, i
 
 ////////////////////////////////////////////////////////////////////////////////
 
-struct gguf_str {
-    uint64_t n;  // GGUFv2
-    char * data;
-};
 
 static const size_t GGUF_TYPE_SIZE[GGUF_TYPE_COUNT] = {
     [GGUF_TYPE_UINT8]   = sizeof(uint8_t),
@@ -19937,35 +19933,6 @@ static const char * GGUF_TYPE_NAME[GGUF_TYPE_COUNT] = {
 };
 static_assert(GGUF_TYPE_COUNT == 13, "GGUF_TYPE_COUNT != 13");
 
-union gguf_value {
-    uint8_t  uint8;
-    int8_t   int8;
-    uint16_t uint16;
-    int16_t  int16;
-    uint32_t uint32;
-    int32_t  int32;
-    float    float32;
-    uint64_t uint64;
-    int64_t  int64;
-    double   float64;
-    bool     bool_;
-
-    struct gguf_str str;
-
-    struct {
-        enum gguf_type type;
-
-        uint64_t n;  // GGUFv2
-        void * data;
-    } arr;
-};
-
-struct gguf_kv {
-    struct gguf_str key;
-
-    enum  gguf_type  type;
-    union gguf_value value;
-};
 
 struct gguf_header {
     char magic[4];
@@ -19975,20 +19942,6 @@ struct gguf_header {
     uint64_t n_kv;      // GGUFv2
 };
 
-struct gguf_tensor_info {
-    struct gguf_str name;
-
-    uint32_t n_dims;
-    uint64_t ne[GGML_MAX_DIMS];
-
-    enum ggml_type type;
-
-    uint64_t offset; // offset from start of `data`, must be a multiple of `ALIGNMENT`
-
-    // for writing API
-    const void * data;
-    size_t size;
-};
 
 struct gguf_context {
     struct gguf_header header;
@@ -20277,6 +20230,209 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
 
     // store the current file offset - this is where the data section starts
     ctx->offset = offset;
+
+    // compute the total size of the data section, taking into account the alignment
+    {
+        ctx->size = 0;
+        for (uint64_t i = 0; i < ctx->header.n_tensors; ++i) {
+            struct gguf_tensor_info * info = &ctx->infos[i];
+
+            const int64_t ne =
+                (int64_t) info->ne[0] *
+                (int64_t) info->ne[1] *
+                (int64_t) info->ne[2] *
+                (int64_t) info->ne[3];
+
+            if (ne % ggml_blck_size(info->type) != 0) {
+                fprintf(stderr, "%s: tensor '%s' of type %d (%s) number of elements (%" PRId64 ") is not a multiple of block size (%d)\n",
+                        __func__, info->name.data, (int)info->type, ggml_type_name(info->type), ne, ggml_blck_size(info->type));
+                fclose(file);
+                gguf_free(ctx);
+                return NULL;
+            }
+
+            const size_t size_cur = ggml_row_size(info->type, ne);
+
+            ctx->size += GGML_PAD(size_cur, ctx->alignment);
+        }
+    }
+
+    // load the tensor data only if requested
+    if (params.ctx != NULL) {
+        // if the provided gguf_context is no_alloc, then we create "empty" tensors and do not read the binary blob
+        // otherwise, we load the binary blob into the created ggml_context as well, and point the "data" members of
+        // the ggml_tensor structs to the appropriate locations in the binary blob
+
+        // compute the exact size needed for the new ggml_context
+        const size_t mem_size =
+            params.no_alloc ?
+            (ctx->header.n_tensors    )*ggml_tensor_overhead() :
+            (ctx->header.n_tensors + 1)*ggml_tensor_overhead() + ctx->size;
+
+        struct ggml_init_params pdata = {
+            .mem_size   = mem_size,
+            .mem_buffer = NULL,
+            .no_alloc   = params.no_alloc,
+        };
+
+        *params.ctx = ggml_init(pdata);
+
+        struct ggml_context * ctx_data = *params.ctx;
+
+        struct ggml_tensor * data = NULL;
+
+        if (!params.no_alloc) {
+            data = ggml_new_tensor_1d(ctx_data, GGML_TYPE_I8, ctx->size);
+
+            ok = ok && data != NULL;
+
+            // read the binary blob with the tensor data
+            ok = ok && gguf_fread_el(file, data->data, ctx->size, &offset);
+
+            if (!ok) {
+                fprintf(stderr, "%s: failed to read tensor data\n", __func__);
+                fclose(file);
+                ggml_free(ctx_data);
+                gguf_free(ctx);
+                return NULL;
+            }
+
+            ctx->data = data->data;
+        }
+
+        ggml_set_no_alloc(ctx_data, true);
+
+        // create the tensors
+        for (uint64_t i = 0; i < ctx->header.n_tensors; ++i) {
+            const int64_t ne[GGML_MAX_DIMS] = {
+                ctx->infos[i].ne[0],
+                ctx->infos[i].ne[1],
+                ctx->infos[i].ne[2],
+                ctx->infos[i].ne[3],
+            };
+
+            struct ggml_tensor * cur = ggml_new_tensor(ctx_data, ctx->infos[i].type, ctx->infos[i].n_dims, ne);
+
+            ok = ok && cur != NULL;
+
+            ggml_set_name(cur, ctx->infos[i].name.data);
+
+            if (!ok) {
+                break;
+            }
+
+            // point the data member to the appropriate location in the binary blob using the tensor infos
+            if (!params.no_alloc) {
+              //cur->data = (char *) data->data + ctx->infos[i].offset - ctx->offset; // offset from start of file
+                cur->data = (char *) data->data + ctx->infos[i].offset;               // offset from data
+            }
+        }
+
+        if (!ok) {
+            fprintf(stderr, "%s: failed to read the tensor data\n", __func__);
+            fclose(file);
+            ggml_free(ctx_data);
+            gguf_free(ctx);
+            return NULL;
+        }
+
+        ggml_set_no_alloc(ctx_data, params.no_alloc);
+    }
+
+    fclose(file);
+
+    return ctx;
+}
+
+struct gguf_context * gguf_init_from_data(uint32_t version, uint64_t n_tensors, struct gguf_tensor_info* tensor_info_data, uint64_t n_kv, struct gguf_kv* kv_data, struct gguf_init_params params) {
+    // offset from start of file
+    size_t offset = 0;
+
+
+    bool ok = true;
+
+    struct gguf_context * ctx = GGML_ALIGNED_MALLOC(sizeof(struct gguf_context));
+
+    // read the header
+    {
+        strncpy(ctx->header.magic, GGUF_MAGIC, 4);
+
+        ctx->kv    = NULL;
+        ctx->infos = NULL;
+        ctx->data  = NULL;
+
+        ctx->header.version = version;
+        ctx->header.n_tensors = n_tensors;
+        ctx->header.n_kv = n_kv;
+
+        // sanity-checks to prevent from integer/buffer overflows
+
+        ok = ok && (ctx->header.n_tensors < (SIZE_MAX/2)/sizeof(struct gguf_tensor_info));
+        ok = ok && (ctx->header.n_tensors < (SIZE_MAX/2)/ggml_tensor_overhead());
+        ok = ok && (ctx->header.n_kv      < (SIZE_MAX/2)/sizeof(struct gguf_kv));
+
+        if (!ok) {
+            fprintf(stderr, "%s: failed to build header\n", __func__);
+            gguf_free(ctx);
+            return NULL;
+        }
+    }
+
+    // read the kv pairs
+    {
+        ctx->kv = GGML_MALLOC(ctx->header.n_kv * sizeof(struct gguf_kv));
+
+        for (uint64_t i = 0; i < ctx->header.n_kv; ++i) {
+            struct gguf_kv * kv = &ctx->kv[i];
+
+
+            kv->key = kv_data[i].key;
+            kv->type = kv_data[i].type;
+            kv->value = kv_data[i].value;
+
+        }
+
+    }
+
+    // read the tensor infos
+    {
+        ctx->infos = GGML_MALLOC(ctx->header.n_tensors * sizeof(struct gguf_tensor_info));
+
+        for (uint64_t i = 0; i < ctx->header.n_tensors; ++i) {
+            struct gguf_tensor_info * info = &ctx->infos[i];
+            struct gguf_tensor_info * src_info = tensor_info_data + i;
+
+            for (int j = 0; j < GGML_MAX_DIMS; ++j) {
+                info->ne[j] = src_info->ne[j];
+            }
+
+            info->name = src_info->name;
+            info->n_dims = src_info->n_dims;
+
+            ok = ok && (info->n_dims <= GGML_MAX_DIMS);
+
+            info->type = src_info->type;
+            info->offset = src_info->offset;
+
+            gguf_tensor_info_sanitize(info);
+
+            if (!ok) {
+                fprintf(stderr, "%s: failed to read tensor info\n", __func__);
+                gguf_free(ctx);
+                return NULL;
+            }
+        }
+    }
+
+    ctx->alignment = GGUF_DEFAULT_ALIGNMENT;
+
+    int alignment_idx = gguf_find_key(ctx, "general.alignment");
+    if (alignment_idx != -1) {
+        ctx->alignment = gguf_get_val_u32(ctx, alignment_idx);
+    }
+
+    // store the current file offset - this is where the data section starts
+    ctx->offset = 0;
 
     // compute the total size of the data section, taking into account the alignment
     {
