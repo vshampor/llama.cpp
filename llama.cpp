@@ -965,6 +965,8 @@ struct llama_file {
     FILE * fp;
     size_t size;
 
+    llama_file() = default;
+
     llama_file(const char * fname, const char * mode) {
         fp = std::fopen(fname, mode);
         if (fp == NULL) {
@@ -2502,6 +2504,8 @@ struct llama_model_loader {
 
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
+
+    llama_model_loader() = default;
 
     llama_model_loader(const std::string & fname, bool use_mmap, const struct llama_model_kv_override * param_overrides_p) : file(fname.c_str(), "rb") {
         int trace = 0;
@@ -4608,6 +4612,57 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model vocabulary: " + std::string(e.what()));
         }
+
+        llm_load_print_meta(ml, model);
+
+        if (model.hparams.n_vocab != model.vocab.id_to_token.size()) {
+            throw std::runtime_error("vocab size mismatch");
+        }
+
+        if (params.vocab_only) {
+            LLAMA_LOG_INFO("%s: vocab only - skipping tensors\n", __func__);
+            return 0;
+        }
+
+#ifdef GGML_USE_KOMPUTE
+        if (params.n_gpu_layers > 0 && (
+            !(model.arch == LLM_ARCH_LLAMA || model.arch == LLM_ARCH_FALCON)
+            || !(
+                model.ftype == LLAMA_FTYPE_ALL_F32 ||
+                model.ftype == LLAMA_FTYPE_MOSTLY_F16 ||
+                model.ftype == LLAMA_FTYPE_MOSTLY_Q4_0 ||
+                model.ftype == LLAMA_FTYPE_MOSTLY_Q4_1
+            )
+        )) {
+            // TODO(cebtenzzre): propagate this error outside of llama_load_model_from_file
+            LLAMA_LOG_WARN("%s: disabling Kompute due to unsupported model arch or quantization\n", __func__);
+            params.n_gpu_layers = 0;
+        }
+#endif
+
+        if (!llm_load_tensors(
+            ml, model, params.n_gpu_layers, params.split_mode,  params.main_gpu, params.tensor_split, params.use_mlock,
+            params.progress_callback, params.progress_callback_user_data
+        )) {
+            return -2;
+        }
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
+        return -1;
+    }
+
+    return 0;
+}
+
+static int llama_model_load_from_data(uint64_t n_tensors, struct gguf_tensor_info* tensor_info_data, uint64_t n_kv, struct gguf_kv* kv_data, void** tensor_data_ptrs,  llama_model & model, llama_model_params & params) {
+    try {
+        llama_model_loader_from_data ml(n_tensors, tensor_info_data, n_kv, kv_data, tensor_data_ptrs, params.kv_overrides);
+
+        model.hparams.vocab_only = params.vocab_only;
+
+        llm_load_arch   (ml, model);
+        llm_load_hparams(ml, model);
+        llm_load_vocab  (ml, model);
 
         llm_load_print_meta(ml, model);
 
@@ -11745,6 +11800,45 @@ struct llama_model * llama_load_model_from_file(
     }
 
     int status = llama_model_load(path_model, *model, params);
+    GGML_ASSERT(status <= 0);
+    if (status < 0) {
+        if (status == -1) {
+            LLAMA_LOG_ERROR("%s: failed to load model\n", __func__);
+        } else if (status == -2) {
+            LLAMA_LOG_INFO("%s: cancelled model load\n", __func__);
+        }
+        delete model;
+        return nullptr;
+    }
+
+    return model;
+}
+
+
+
+struct llama_model * llama_load_model_from_data(uint64_t n_tensors, struct gguf_tensor_info* tensor_info_data, uint64_t n_kv, struct gguf_kv* kv_data, void** tensor_data_ptrs, struct llama_model_params     params) {
+    ggml_time_init();
+
+    llama_model * model = new llama_model;
+
+    unsigned cur_percentage = 0;
+    if (params.progress_callback == NULL) {
+        params.progress_callback_user_data = &cur_percentage;
+        params.progress_callback = [](float progress, void * ctx) {
+            unsigned * cur_percentage_p = (unsigned *) ctx;
+            unsigned percentage = (unsigned) (100 * progress);
+            while (percentage > *cur_percentage_p) {
+                *cur_percentage_p = percentage;
+                LLAMA_LOG_INFO(".");
+                if (percentage >= 100) {
+                    LLAMA_LOG_INFO("\n");
+                }
+            }
+            return true;
+        };
+    }
+
+    int status = llama_model_load_from_data(n_tensors, tensor_info_data, n_kv, kv_data, tensor_data_ptrs, *model, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
         if (status == -1) {

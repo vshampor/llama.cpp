@@ -20344,11 +20344,7 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
     return ctx;
 }
 
-struct gguf_context * gguf_init_from_data(uint32_t version, uint64_t n_tensors, struct gguf_tensor_info* tensor_info_data, uint64_t n_kv, struct gguf_kv* kv_data, struct gguf_init_params params) {
-    // offset from start of file
-    size_t offset = 0;
-
-
+struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor_info* tensor_info_data, uint64_t n_kv, struct gguf_kv* kv_data, void** tensor_data_ptrs, struct gguf_init_params params) {
     bool ok = true;
 
     struct gguf_context * ctx = GGML_ALIGNED_MALLOC(sizeof(struct gguf_context));
@@ -20361,7 +20357,7 @@ struct gguf_context * gguf_init_from_data(uint32_t version, uint64_t n_tensors, 
         ctx->infos = NULL;
         ctx->data  = NULL;
 
-        ctx->header.version = version;
+        ctx->header.version = 3; // llama's GGUF_FILE_VERSION_V3
         ctx->header.n_tensors = n_tensors;
         ctx->header.n_kv = n_kv;
 
@@ -20449,7 +20445,6 @@ struct gguf_context * gguf_init_from_data(uint32_t version, uint64_t n_tensors, 
             if (ne % ggml_blck_size(info->type) != 0) {
                 fprintf(stderr, "%s: tensor '%s' of type %d (%s) number of elements (%" PRId64 ") is not a multiple of block size (%d)\n",
                         __func__, info->name.data, (int)info->type, ggml_type_name(info->type), ne, ggml_blck_size(info->type));
-                fclose(file);
                 gguf_free(ctx);
                 return NULL;
             }
@@ -20482,27 +20477,6 @@ struct gguf_context * gguf_init_from_data(uint32_t version, uint64_t n_tensors, 
 
         struct ggml_context * ctx_data = *params.ctx;
 
-        struct ggml_tensor * data = NULL;
-
-        if (!params.no_alloc) {
-            data = ggml_new_tensor_1d(ctx_data, GGML_TYPE_I8, ctx->size);
-
-            ok = ok && data != NULL;
-
-            // read the binary blob with the tensor data
-            ok = ok && gguf_fread_el(file, data->data, ctx->size, &offset);
-
-            if (!ok) {
-                fprintf(stderr, "%s: failed to read tensor data\n", __func__);
-                fclose(file);
-                ggml_free(ctx_data);
-                gguf_free(ctx);
-                return NULL;
-            }
-
-            ctx->data = data->data;
-        }
-
         ggml_set_no_alloc(ctx_data, true);
 
         // create the tensors
@@ -20524,16 +20498,14 @@ struct gguf_context * gguf_init_from_data(uint32_t version, uint64_t n_tensors, 
                 break;
             }
 
-            // point the data member to the appropriate location in the binary blob using the tensor infos
+            // Looks like the ctx->data is not actually used for anything.
             if (!params.no_alloc) {
-              //cur->data = (char *) data->data + ctx->infos[i].offset - ctx->offset; // offset from start of file
-                cur->data = (char *) data->data + ctx->infos[i].offset;               // offset from data
+                cur->data = (char *) tensor_data_ptrs[i];
             }
         }
 
         if (!ok) {
             fprintf(stderr, "%s: failed to read the tensor data\n", __func__);
-            fclose(file);
             ggml_free(ctx_data);
             gguf_free(ctx);
             return NULL;
@@ -20541,8 +20513,6 @@ struct gguf_context * gguf_init_from_data(uint32_t version, uint64_t n_tensors, 
 
         ggml_set_no_alloc(ctx_data, params.no_alloc);
     }
-
-    fclose(file);
 
     return ctx;
 }
