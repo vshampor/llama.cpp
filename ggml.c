@@ -20380,12 +20380,61 @@ struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor
 
         for (uint64_t i = 0; i < ctx->header.n_kv; ++i) {
             struct gguf_kv * kv = &ctx->kv[i];
+            char* kv_key = kv->key.data;
+            switch (kv->type) {
+                case GGUF_TYPE_UINT8:   gguf_set_val_u8(ctx, kv_key, kv->value.uint8); break;
+                case GGUF_TYPE_INT8:    gguf_set_val_i8(ctx, kv_key, kv->value.int8); break;
+                case GGUF_TYPE_UINT16:  gguf_set_val_u16(ctx, kv_key, kv->value.uint16); break;
+                case GGUF_TYPE_INT16:   gguf_set_val_i16(ctx, kv_key, kv->value.int16); break;
+                case GGUF_TYPE_UINT32:  gguf_set_val_u32(ctx, kv_key, kv->value.uint32);  break;
+                case GGUF_TYPE_INT32:   gguf_set_val_i32(ctx, kv_key, kv->value.int32);  break;
+                case GGUF_TYPE_FLOAT32: gguf_set_val_f32(ctx, kv_key, kv->value.float32);  break;
+                case GGUF_TYPE_UINT64:  gguf_set_val_u64(ctx, kv_key, kv->value.uint64);  break;
+                case GGUF_TYPE_INT64:   gguf_set_val_i64(ctx, kv_key, kv->value.int64);  break;
+                case GGUF_TYPE_FLOAT64: gguf_set_val_f64(ctx, kv_key, kv->value.float64);  break;
+                case GGUF_TYPE_BOOL:    gguf_set_val_bool(ctx, kv_key, kv->value.bool_);  break;
+                case GGUF_TYPE_STRING:  gguf_set_val_str(ctx, kv_key, kv->value.str.data); break;
+                case GGUF_TYPE_ARRAY:
+                    {
+                        switch (kv->value.arr.type) {
+                            case GGUF_TYPE_UINT8:
+                            case GGUF_TYPE_INT8:
+                            case GGUF_TYPE_UINT16:
+                            case GGUF_TYPE_INT16:
+                            case GGUF_TYPE_UINT32:
+                            case GGUF_TYPE_INT32:
+                            case GGUF_TYPE_FLOAT32:
+                            case GGUF_TYPE_UINT64:
+                            case GGUF_TYPE_INT64:
+                            case GGUF_TYPE_FLOAT64:
+                            case GGUF_TYPE_BOOL:
+                                {
+                                    // prevent from integer overflow in the malloc below
+                                    if (kv->value.arr.n >= SIZE_MAX/gguf_type_size(kv->value.arr.type)) {
+                                        fprintf(stderr, "%s: array size is too large (%" PRIu64 ")\n", __func__, kv->value.arr.n);
+                                        gguf_free(ctx);
+                                        return NULL;
+                                    }
+                                    gguf_set_arr_data(ctx, kv_key, kv->value.arr.type, kv->value.arr.data, kv->value.arr.n);
+                                } break;
+                            case GGUF_TYPE_STRING:
+                                {
+                                    // prevent from integer overflow in the malloc below
+                                    if (kv->value.arr.n >= SIZE_MAX/sizeof(struct gguf_str)) {
+                                        fprintf(stderr, "%s: array size is too large (%" PRIu64 ")\n", __func__, kv->value.arr.n);
+                                        gguf_free(ctx);
+                                        return NULL;
+                                    }
 
-
-            kv->key = kv_data[i].key;
-            kv->type = kv_data[i].type;
-            kv->value = kv_data[i].value;
-
+                                    const char** str_data = (const char**) kv->value.arr.data;
+                                    gguf_set_arr_str(ctx, kv_key, str_data, kv->value.arr.n);
+                                } break;
+                            case GGUF_TYPE_ARRAY:
+                            default: GGML_ASSERT(false && "invalid type"); break;
+                        }
+                    } break;
+                default: GGML_ASSERT(false && "invalid type");
+            }
         }
 
     }
