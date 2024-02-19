@@ -20359,13 +20359,13 @@ struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor
 
         ctx->header.version = 3; // llama's GGUF_FILE_VERSION_V3
         ctx->header.n_tensors = n_tensors;
-        ctx->header.n_kv = n_kv;
+        ctx->header.n_kv = 0;  // will be increased to a correct value of `n_kv` during gguf_set_val calls below
 
         // sanity-checks to prevent from integer/buffer overflows
 
         ok = ok && (ctx->header.n_tensors < (SIZE_MAX/2)/sizeof(struct gguf_tensor_info));
         ok = ok && (ctx->header.n_tensors < (SIZE_MAX/2)/ggml_tensor_overhead());
-        ok = ok && (ctx->header.n_kv      < (SIZE_MAX/2)/sizeof(struct gguf_kv));
+        ok = ok && (n_kv      < (SIZE_MAX/2)/sizeof(struct gguf_kv));
 
         if (!ok) {
             fprintf(stderr, "%s: failed to build header\n", __func__);
@@ -20376,10 +20376,8 @@ struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor
 
     // read the kv pairs
     {
-        ctx->kv = GGML_MALLOC(ctx->header.n_kv * sizeof(struct gguf_kv));
-
-        for (uint64_t i = 0; i < ctx->header.n_kv; ++i) {
-            struct gguf_kv * kv = &ctx->kv[i];
+        for (uint64_t i = 0; i < n_kv; ++i) {
+            struct gguf_kv * kv = kv_data + i;
             char* kv_key = kv->key.data;
             switch (kv->type) {
                 case GGUF_TYPE_UINT8:   gguf_set_val_u8(ctx, kv_key, kv->value.uint8); break;
@@ -20436,7 +20434,6 @@ struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor
                 default: GGML_ASSERT(false && "invalid type");
             }
         }
-
     }
 
     // read the tensor infos
@@ -20547,10 +20544,7 @@ struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor
                 break;
             }
 
-            // Looks like the ctx->data is not actually used for anything.
-            if (!params.no_alloc) {
-                cur->data = (char *) tensor_data_ptrs[i];
-            }
+            cur->data = (char *) tensor_data_ptrs[i];
         }
 
         if (!ok) {

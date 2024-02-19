@@ -2253,7 +2253,7 @@ extern "C" {
     GGML_API struct gguf_context * gguf_init_empty(void);
     GGML_API struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_params params);
     //GGML_API struct gguf_context * gguf_init_from_buffer(..);
-    GGML_API struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor_info* tensor_info_data, uint64_t n_kv, struct gguf_kv* kv_data, void** tensor_data_ptrs, struct gguf_init_params params);
+    GGML_API struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor_info* tensor_info_data, uint64_t n_kv, struct gguf_kv* kv_data, void** tensor_ptrs, struct gguf_init_params params);
 
     GGML_API void gguf_free(struct gguf_context * ctx);
 
