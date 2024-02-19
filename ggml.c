@@ -20448,13 +20448,17 @@ struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor
                 info->ne[j] = src_info->ne[j];
             }
 
-            info->name = src_info->name;
+            info->name.data = strdup(src_info->name.data);
+            info->name.n = strlen(info->name.data);
+
             info->n_dims = src_info->n_dims;
 
             ok = ok && (info->n_dims <= GGML_MAX_DIMS);
 
             info->type = src_info->type;
+            info->size = src_info->size;
             info->offset = src_info->offset;
+            info->data = src_info->data;
 
             gguf_tensor_info_sanitize(info);
 
