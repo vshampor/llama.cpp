@@ -19934,28 +19934,8 @@ static const char * GGUF_TYPE_NAME[GGUF_TYPE_COUNT] = {
 static_assert(GGUF_TYPE_COUNT == 13, "GGUF_TYPE_COUNT != 13");
 
 
-struct gguf_header {
-    char magic[4];
-
-    uint32_t version;
-    uint64_t n_tensors; // GGUFv2
-    uint64_t n_kv;      // GGUFv2
-};
 
 
-struct gguf_context {
-    struct gguf_header header;
-
-    struct gguf_kv          * kv;
-    struct gguf_tensor_info * infos;
-
-    size_t alignment;
-    size_t offset;    // offset of `data` from beginning of file
-    size_t size;      // size of `data` in bytes
-
-    //uint8_t * padding;
-    void * data;
-};
 
 static size_t gguf_type_size(enum gguf_type type) {
     GGML_ASSERT(0 <= type && type < GGUF_TYPE_COUNT);
@@ -20458,7 +20438,6 @@ struct gguf_context * gguf_init_from_data(uint64_t n_tensors, struct gguf_tensor
             info->type = src_info->type;
             info->size = src_info->size;
             info->offset = src_info->offset;
-            info->data = src_info->data;
 
             gguf_tensor_info_sanitize(info);
 

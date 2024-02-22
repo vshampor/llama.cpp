@@ -2240,8 +2240,27 @@ extern "C" {
         size_t size;
     };
 
+    struct gguf_header {
+        char magic[4];
 
-    struct gguf_context;
+        uint32_t version;
+        uint64_t n_tensors; // GGUFv2
+        uint64_t n_kv;      // GGUFv2
+    };
+
+    struct gguf_context {
+        struct gguf_header header;
+
+        struct gguf_kv          * kv;
+        struct gguf_tensor_info * infos;
+
+        size_t alignment;
+        size_t offset;    // offset of `data` from beginning of file
+        size_t size;      // size of `data` in bytes
+
+        //uint8_t * padding;
+        void * data;
+    };
 
     struct gguf_init_params {
         bool no_alloc;
