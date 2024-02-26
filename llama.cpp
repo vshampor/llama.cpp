@@ -3003,7 +3003,6 @@ static void llm_load_arch(llama_model_loader & ml, llama_model & model) {
 
 static void llm_load_hparams(
         llama_model_loader & ml,
-        llama_model_loader & vocab_ml,
         llama_model & model) {
     auto & hparams = model.hparams;
     const gguf_context * ctx = ml.ctx_gguf;
@@ -3023,7 +3022,7 @@ static void llm_load_hparams(
     ml.get_key(LLM_KV_GENERAL_NAME, model.name, false);
 
     // get hparams kv
-    vocab_ml.get_arr_n(LLM_KV_TOKENIZER_LIST,       hparams.n_vocab);
+    ml.get_arr_n(LLM_KV_TOKENIZER_LIST,       hparams.n_vocab);
     ml.get_key  (LLM_KV_CONTEXT_LENGTH,       hparams.n_ctx_train);
     ml.get_key  (LLM_KV_EMBEDDING_LENGTH,     hparams.n_embd);
     ml.get_key  (LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff);
@@ -3345,6 +3344,10 @@ static llama_token llama_byte_to_token(const llama_vocab & vocab, uint8_t ch);
 static void llm_load_vocab(
         llama_model_loader & ml,
         llama_model & model) {
+    if (!model.hparams.n_vocab) {
+        // GGUF model file did not specify a tokenizer
+        return;
+    }
     auto & vocab = model.vocab;
 
     struct gguf_context * ctx = ml.ctx_gguf;
@@ -4591,6 +4594,7 @@ static bool llm_load_tensors(
     return true;
 }
 
+
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
@@ -4665,7 +4669,7 @@ static int llama_model_load_from_data(uint64_t n_tensors, struct gguf_tensor_inf
         model.hparams.vocab_only = params.vocab_only;
 
         llm_load_arch   (ml, model);
-        llm_load_hparams(ml, ml, model);
+        llm_load_hparams(ml, model);
         llm_load_vocab  (ml, model);
 
         llm_load_print_meta(ml, model);
@@ -11079,7 +11083,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     llama_model model;
     llm_load_arch(ml, model);
-    llm_load_hparams(ml, ml, model);
+    llm_load_hparams(ml, model);
 
     struct quantize_state_internal qs(model, params);
 
