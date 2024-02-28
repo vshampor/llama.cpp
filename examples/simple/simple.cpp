@@ -84,6 +84,12 @@ int main(int argc, char ** argv) {
 
     fprintf(stderr, "\n");
 
+    fprintf(stderr, "Input tokens:\n");
+    for (auto id : tokens_list) {
+        fprintf(stderr, "%d ", id);
+    }
+    fprintf(stderr, "\n");
+
     for (auto id : tokens_list) {
         fprintf(stderr, "%s", llama_token_to_piece(ctx, id).c_str());
     }
@@ -115,6 +121,8 @@ int main(int argc, char ** argv) {
 
     const auto t_main_start = ggml_time_us();
 
+    std::vector<int> output_tokens_list;
+
     while (n_cur <= n_len) {
         // sample the next token
         {
@@ -132,6 +140,7 @@ int main(int argc, char ** argv) {
 
             // sample the most likely token
             const llama_token new_token_id = llama_sample_token_greedy(ctx, &candidates_p);
+            output_tokens_list.push_back(new_token_id);
 
             // is it an end of stream?
             if (new_token_id == llama_token_eos(model) || n_cur == n_len) {
@@ -178,6 +187,12 @@ int main(int argc, char ** argv) {
     llama_free_model(model);
 
     llama_backend_free();
+
+    fprintf(stderr, "Output tokens:\n");
+    for (auto id : output_tokens_list) {
+        fprintf(stderr, "%d ", id);
+    }
+    fprintf(stderr, "\n");
 
     return 0;
 }
