@@ -965,8 +965,6 @@ struct llama_file {
     FILE * fp;
     size_t size;
 
-    llama_file() = default;
-
     llama_file(const char * fname, const char * mode) {
         fp = std::fopen(fname, mode);
         if (fp == NULL) {
@@ -2505,8 +2503,6 @@ struct llama_model_loader {
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
-    llama_model_loader() = default;
-
     llama_model_loader(const std::string & fname, bool use_mmap, const struct llama_model_kv_override * param_overrides_p) : file(fname.c_str(), "rb") {
         int trace = 0;
         if (getenv("LLAMA_TRACE")) {
@@ -3344,10 +3340,6 @@ static llama_token llama_byte_to_token(const llama_vocab & vocab, uint8_t ch);
 static void llm_load_vocab(
         llama_model_loader & ml,
         llama_model & model) {
-    if (!model.hparams.n_vocab) {
-        // GGUF model file did not specify a tokenizer
-        return;
-    }
     auto & vocab = model.vocab;
 
     struct gguf_context * ctx = ml.ctx_gguf;
